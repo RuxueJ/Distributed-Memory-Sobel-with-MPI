@@ -386,6 +386,31 @@ sendStridedBuffer(float *srcBuf,
    // sendWidth by sendHeight values, and the subregion is offset from the origin of
    // srcBuf by the values specificed by srcOffsetColumn, srcOffsetRow.
    //
+   // Create a temporary buffer to store the contiguous data to send
+   float* tempBuf = new float[sendWidth * sendHeight];
+
+   // Copy the strided data into the temporary buffer
+   for (int i = 0; i < sendHeight; i++) {
+       // Calculate source and destination offsets
+       int srcOffset = (srcOffsetRow + i) * srcWidth + srcOffsetColumn;
+       int destOffset = i * sendWidth;
+
+       // Copy one row at a time
+       memcpy(&tempBuf[destOffset],
+           &srcBuf[srcOffset],
+           sendWidth * sizeof(float));
+   }
+
+   // Send the contiguous data
+   MPI_Send(tempBuf,                    // buffer to send
+       sendWidth * sendHeight,      // number of elements
+       MPI_FLOAT,                   // data type
+       toRank,                      // destination rank
+       msgTag,                      // message tag
+       MPI_COMM_WORLD);            // communicator
+
+   // Clean up
+   delete[] tempBuf;
 
 }
 
@@ -407,6 +432,50 @@ recvStridedBuffer(float *dstBuf,
    // values. This incoming data is to be placed into the subregion of dstBuf that has an origin
    // at dstOffsetColumn, dstOffsetRow, and that is expectedWidth, expectedHeight in size.
    //
+   // 
+   // Create temporary buffer to receive contiguous data
+   float* tempBuf = new float[expectedWidth * expectedHeight];
+
+   // Receive the data into temporary buffer
+   MPI_Recv(tempBuf,                      // where to receive
+       expectedWidth * expectedHeight, // how many elements
+       MPI_FLOAT,                     // data type
+       fromRank,                      // from which rank
+       msgTag,                        // message tag
+       MPI_COMM_WORLD,                // communicator
+       &stat);                        // status
+   do i 
+   // Copy data from temporary buffer to destination with proper striding
+   for (int i = 0; i < expectedHeight; i++) {
+       // Calculate offsets
+       int dstOffset = (dstOffsetRow + i) * dstWidth + dstOffsetColumn;
+       int srcOffset = i * expectedWidth;
+
+       // Copy one row at a time
+       memcpy(&dstBuf[dstOffset],
+           &tempBuf[srcOffset],
+           expectedWidth * sizeof(float));
+   }
+
+   // Clean up
+   delete[] tempBuf;
+
+   // Create subarray datatype
+   //MPI_Datatype subarray;
+   //int sizes[2] = { dstHeight, dstWidth };
+   //int subsizes[2] = { expectedHeight, expectedWidth };
+   //int starts[2] = { dstOffsetRow, dstOffsetColumn };
+
+   //MPI_Type_create_subarray(2, sizes, subsizes, starts,
+   //    MPI_ORDER_C, MPI_FLOAT, &subarray);
+   //MPI_Type_commit(&subarray);
+
+   //// Receive the data
+   //MPI_Recv(dstBuf, 1, subarray, fromRank, msgTag,
+   //    MPI_COMM_WORLD, &stat);
+
+   //// Clean up
+   //MPI_Type_free(&subarray);
 
 }
 
@@ -416,6 +485,55 @@ recvStridedBuffer(float *dstBuf,
 // that performs sobel filtering
 // suggest using your cpu code from HW5, no OpenMP parallelism 
 //
+float
+sobel_filtered_pixel(float* s, int i, int j, int ncols, int nrows, float* gx, float* gy)
+{
+    float t = 0.0;
+
+    // ADD CODE HERE: add your code here for computing the sobel stencil computation at location (i,j)
+    // of input s, returning a float
+    float Gx = 0.0;
+    float Gy = 0.0;
+
+    // 3x3 Sobel filter stencil centered at (i, j)
+    int index = 0;  // For accessing gx and gy arrays
+    for (int di = -1; di <= 1; di++) {      // Loop over 3x3 neighborhood
+        for (int dj = -1; dj <= 1; dj++) {
+            int ni = i + di;                // Neighbor row
+            int nj = j + dj;                // Neighbor column
+
+            // Check if the neighbor indices are within the bounds
+            if (ni >= 0 && ni < nrows && nj >= 0 && nj < ncols) {
+                Gx += s[ni * ncols + nj] * gx[index];
+                Gy += s[ni * ncols + nj] * gy[index];
+            }
+            index++;
+        }
+    }
+    t = sqrt(Gx * Gx + Gy * Gy);
+
+
+    return t;
+}
+
+
+void
+do_sobel_filtering(float* in, float* out, int ncols, int nrows)
+{
+    float Gx[] = { 1.0, 0.0, -1.0, 2.0, 0.0, -2.0, 1.0, 0.0, -1.0 };
+    float Gy[] = { 1.0, 2.0, 1.0, 0.0, 0.0, 0.0, -1.0, -2.0, -1.0 };
+
+    // ADD CODE HERE: insert your code here that iterates over every (i,j) of input,  makes a call
+    // to sobel_filtered_pixel, and assigns the resulting value at location (i,j) in the output.
+    // Iterate over each pixel in the image
+#pragma omp parallel for collapse(2) 
+    for (int i = 0; i < nrows; i++) {
+        for (int j = 0; j < ncols; j++) {
+            // Apply the Sobel filter to the pixel at (i, j)
+            out[i * ncols + j] = sobel_filtered_pixel(in, i, j, ncols, nrows, Gx, Gy);
+        }
+    }
+}
 
 
 void
@@ -439,6 +557,10 @@ sobelAllTiles(int myrank, vector < vector < Tile2D > > & tileArray) {
 #endif
          // ADD YOUR CODE HERE
          // to call your sobel filtering code on each tile
+             do_sobel_filtering(t->inputBuffer.data(),    // Get pointer to input buffer
+                 t->outputBuffer.data(),     // Get pointer to output buffer
+                 t->width,                   // tile width
+                 t->height);
          }
       }
    }
